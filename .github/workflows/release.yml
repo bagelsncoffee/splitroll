@@ -13,7 +13,7 @@ jobs:
   windows-installer:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Tools
         run: |
           sudo apt-get update -qq
@@ -37,7 +37,7 @@ jobs:
           python3 packaging/release_notes.py "$V" > notes.md
           gh release create "$GITHUB_REF_NAME" dist/splitroll-$V-setup.exe dist/splitroll-$V-setup.exe.sha256 \
             --title "splitroll $V" --notes-file notes.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
           name: splitroll-installer

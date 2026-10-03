@@ -297,6 +297,15 @@ def create_app(lib, cache, dialogs):
             abort(404)
         return jsonify(j)
 
+    @app.route("/api/zoom", methods=["POST"])
+    def zoom():
+        z = max(0.5, min(3.0, float(body().get("factor", 1.0))))
+        native = dialogs.set_zoom(z) if hasattr(dialogs, "set_zoom") else False
+        with lib.lock:
+            lib.settings["uiZoom"] = z
+        lib.touch()
+        return jsonify({"factor": z, "native": native})
+
     @app.route("/api/reveal", methods=["POST"])
     def reveal_():
         p = body().get("path", "")

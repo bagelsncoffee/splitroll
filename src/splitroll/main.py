@@ -80,10 +80,39 @@ class Dialogs:
     def _wv(self, kind, title, start, types=()):
         import webview
         ft = webview.FileDialog.FOLDER if kind == "folder" else webview.FileDialog.OPEN
-        res = self.window.create_file_dialog(ft, directory=start or "", file_types=tuple(types))
+        try:
+            res = self.window.create_file_dialog(ft, directory=start or "", file_types=tuple(types))
+        finally:
+            self.refocus()               # WebView2 loses keyboard focus when a native dialog closes
         if not res:
             return None
         return res[0] if isinstance(res, (list, tuple)) else res
+
+    # ── Windows/WebView2 helpers (no-ops elsewhere) ──
+    def _on_ui_thread(self, fn):
+        if sys.platform != "win32" or not self.window:
+            return False
+        try:
+            import System
+            from webview.platforms.winforms import BrowserView
+            form = BrowserView.instances.get(self.window.uid)
+            if not form:
+                return False
+            form.Invoke(System.Action(lambda: fn(form)))
+            return True
+        except Exception as e:
+            log.info("ui-thread call failed: %s", e)
+            return False
+
+    def refocus(self):
+        def f(form):
+            form.Activate()
+            form.browser.webview.Focus()
+        self._on_ui_thread(f)
+
+    def set_zoom(self, factor):
+        factor = max(0.5, min(3.0, float(factor)))
+        return self._on_ui_thread(lambda form: setattr(form.browser.webview, "ZoomFactor", factor))
 
     def _tk(self, kind, title, start):
         try:
@@ -213,6 +242,10 @@ def main(argv=None):
         def on_start():
             dark_title_bar(APP_TITLE)
             register_drop(window)
+            z = lib.settings.get("uiZoom") or 1.0
+            if z != 1.0:
+                time.sleep(0.5)
+                dialogs.set_zoom(z)
 
         window.events.closing += lambda: lib.flush()
         kw = {"gui": "edgechromium"} if sys.platform == "win32" else {}

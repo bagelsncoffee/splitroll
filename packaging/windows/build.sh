@@ -50,9 +50,8 @@ tar xzf "$WORK"/sdist/proxy_tools-0.1.0.tar.gz -C "$WORK/sdist"
 cp -r "$WORK/sdist/proxy_tools-0.1.0/proxy_tools" "$SITE/"
 # trim what a desktop app never uses
 rm -rf "$SITE"/bin "$SITE"/numpy/*/tests "$SITE"/numpy/tests "$SITE"/numpy/_pyinstaller "$SITE"/numpy/f2py \
-       "$SITE"/webview/lib/pywebview-android.jar "$SITE"/webview/lib/WebBrowserInterop.x86.dll \
-       "$SITE"/webview/lib/runtimes/win-x86 "$SITE"/webview/lib/runtimes/win-arm64 \
-       "$SITE"/clr_loader/ffi/dlls/x86 "$SITE"/PIL/*.pyi
+       "$SITE"/webview/lib/pywebview-android.jar "$SITE"/PIL/*.pyi
+# note: pywebview requires every webview/lib/runtimes/win-* folder to exist — don't trim them
 find "$SITE" -name "*.pdb" -delete
 # imagecodecs: keep only the codecs TIFF/PNG decoding needs
 KEEP='_imcd|_shared|_shared_cython|_png|_spng|_lzw|_zlib|_zlibng|_deflate|_jpeg8|_ljpeg|_jpegsof3|_lzma|_zstd|_webp|_tiff'

@@ -20,7 +20,7 @@ from datetime import date
 from pathlib import Path
 
 SCHEMA = 2
-DEFAULT_SETTINGS = {"exportDir": "", "exportFormat": "tiff", "naming": "roll", "lastImportDir": ""}
+DEFAULT_SETTINGS = {"exportDir": "", "exportFormat": "tiff", "naming": "roll", "lastImportDir": "", "uiZoom": 1.0}
 FRAME_FIELDS = {"rot", "cut", "auto", "gap", "state", "lRot", "rRot", "export"}
 ROLL_FIELDS = {"name", "film", "date", "fullFrame", "border"}
 

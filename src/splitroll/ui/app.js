@@ -879,7 +879,7 @@ function showShortcuts() {
   ask({
     title: 'Keyboard shortcuts', buttons: [{ label: 'CLOSE', value: true, pri: true }],
     body: `<div class="keys">
-      <h4>EVERYWHERE</h4>${k(['1', '2', '3'], 'Contact sheet / Crop / Export')}${k(['Ctrl', 'Z'], 'Undo')}${k(['Ctrl', 'Shift', 'Z'], 'Redo')}${k(['Ctrl', 'I'], 'Import folder as new roll')}${k(['?'], 'This list')}
+      <h4>EVERYWHERE</h4>${k(['1', '2', '3'], 'Contact sheet / Crop / Export')}${k(['Ctrl', 'Z'], 'Undo')}${k(['Ctrl', 'Shift', 'Z'], 'Redo')}${k(['Ctrl', 'I'], 'Import folder as new roll')}${k(['Ctrl', '+', '−', '0'], 'Interface size bigger / smaller / reset')}${k(['?'], 'This list')}
       <h4>CONTACT SHEET</h4>${k(['Click'], 'Select · Shift-click selects a range')}${k(['Double-click'], 'Open in Crop')}${k(['Ctrl', 'A'], 'Select all')}${k(['Esc'], 'Clear selection')}${k(['Del'], 'Remove selected from roll')}
       <h4>CROP</h4>${k(['←', '→'], 'Previous / next frame')}${k(['Enter'], 'Split and go to next')}${k(['F'], 'Full frame and go to next')}${k(['U'], 'Back to pending')}
       ${k([',', '.'], 'Nudge cut (hold Shift for ×10)')}${k(['A'], 'Auto-detect cut')}${k(['R'], 'Rotate scan')}${k(['[', ']'], 'Rotate left / right half')}
@@ -894,6 +894,19 @@ function showAbout() {
       Your library is stored locally. Scans are never modified.<br>
       <button class="btn sm" style="margin-top:10px" data-act="openData">OPEN DATA FOLDER</button>`,
   });
+}
+
+// ── interface size (WebView2 zoom on Windows; browser zoom elsewhere) ─────
+const ZOOMS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+async function uiZoom(dir) {
+  const cur = S.settings.uiZoom || 1;
+  let i = ZOOMS.findIndex(z => z >= cur - 1e-6); if (i < 0) i = ZOOMS.length - 1;
+  const next = dir === 0 ? 1 : ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, i + dir))];
+  try {
+    const r = await POST('/api/zoom', { factor: next });
+    S.settings.uiZoom = r.factor;
+    toast(r.native ? `Interface size ${Math.round(r.factor * 100)}%` : 'Use your browser zoom (Ctrl + / −) here');
+  } catch (e) { toast(e.message, { err: true }); }
 }
 
 // ── native drag & drop (paths arrive from the app shell) ───────────────────
@@ -915,6 +928,7 @@ document.addEventListener('drop', e => {
 
 // ── actions + keyboard ─────────────────────────────────────────────────────
 const ACTIONS = {
+  zoomUi: () => { toggleMenu(false); ask({ title: 'Interface size', body: `Currently ${Math.round((S.settings.uiZoom || 1) * 100)}%.<br>Use <code>Ctrl +</code> / <code>Ctrl −</code> to change it and <code>Ctrl 0</code> to reset.`, buttons: [{ label: 'SMALLER', value: -1 }, { label: 'RESET', value: 0 }, { label: 'BIGGER', value: 1, pri: true }] }).then(v => v !== null && v !== undefined && uiZoom(v)); },
   importNew, importInto, relink, menu: () => toggleMenu(), newRoll, importLibrary, shortcuts: showShortcuts, about: showAbout,
   openData: () => { toggleMenu(false); POST('/api/reveal', { path: '@data' }); },
   sheet: saveSheet, selAll: () => selAction('all'), selClear: () => selAction('clear'),
@@ -967,6 +981,9 @@ document.addEventListener('keydown', e => {
   if (ctrl && key.toLowerCase() === 'z') { e.preventDefault(); return e.shiftKey ? redo() : undo(); }
   if (ctrl && key.toLowerCase() === 'y') { e.preventDefault(); return redo(); }
   if (ctrl && key.toLowerCase() === 'i') { e.preventDefault(); return importNew(); }
+  if (ctrl && (key === '=' || key === '+')) { e.preventDefault(); return uiZoom(1); }
+  if (ctrl && key === '-') { e.preventDefault(); return uiZoom(-1); }
+  if (ctrl && key === '0') { e.preventDefault(); return uiZoom(0); }
   if (key === '?') return showShortcuts();
   const r = roll(); if (!r || !r.frames.length) return;
   if (!ctrl && ['1', '2', '3'].includes(key)) return setTab(['contact', 'crop', 'export'][+key - 1]);

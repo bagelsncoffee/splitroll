@@ -1,6 +1,19 @@
 # Changelog
 
-## 1.2.0 — 2026-10-03 · first Windows release (renamed from halfframe)
+## 1.2.1 — 2026-10-03 · first public release
+
+Fixes from testing the 1.2.0 build on Windows 11:
+- The app couldn't open its window ("Cannot find win-arm64"): the installer left out WebView2 files that
+  pywebview needs on every PC.
+- Keyboard shortcuts stopped working after a folder dialog closed, until you clicked in the window.
+- Messages popped up over the Split / Export buttons — they now appear centred above the picture.
+- The crop toolbar could hide the Split button in a narrow window; it now wraps instead.
+
+New:
+- Interface size: `Ctrl +` / `Ctrl −` / `Ctrl 0` (or ⋯ → Interface size…), remembered between sessions —
+  handy on large or ultrawide monitors.
+
+## 1.2.0 — 2026-10-03 · Windows rewrite, renamed from halfframe (test build, not published)
 
 **New**
 - Windows installer (per-user, no admin), Start-menu shortcut, uninstaller, app icon.
