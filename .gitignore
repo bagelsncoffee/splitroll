@@ -1,0 +1,8 @@
+build/
+dist/
+_toolchain/
+samples/
+Claude outputs/
+__pycache__/
+*.pyc
+.pytest_cache/

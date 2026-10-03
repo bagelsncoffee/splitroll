@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>splitroll</title>
+<link rel="icon" href="/ui/icon.png">
+<link rel="stylesheet" href="/ui/app.css">
+<!--BOOT-->
+</head>
+<body>
+<div id="app">
+  <aside id="sb">
+    <div class="sb-head">
+      <div class="logo"><img src="/ui/logo.png" alt=""><span>splitroll</span></div>
+      <button class="btn pri wide" data-act="importNew" title="Import a folder of scans as a new roll (Ctrl+I)">+ IMPORT FOLDER</button>
+    </div>
+    <div id="rolls" class="rolls"></div>
+    <div class="sb-foot">
+      <span class="muted small">drop a folder anywhere</span>
+      <button class="icon-btn" data-act="menu" title="More">⋯</button>
+    </div>
+  </aside>
+  <main id="content">
+    <nav class="tabbar">
+      <div class="tab" data-tab="contact">CONTACT SHEET</div>
+      <div class="tab" data-tab="crop">CROP</div>
+      <div class="tab" data-tab="export">EXPORT</div>
+      <div class="sp"></div>
+      <span id="undoHint" class="muted small"></span>
+    </nav>
+    <div id="warn"></div>
+    <div id="panel"></div>
+  </main>
+</div>
+<div id="dropOverlay"><div>Drop a folder to import it as a roll</div></div>
+<div id="toasts"></div>
+<div id="modalRoot"></div>
+<div id="menu" class="menu" hidden>
+  <button data-act="newRoll">New empty roll</button>
+  <button data-act="importLibrary">Import v1.1 library…</button>
+  <button data-act="openData">Open data folder</button>
+  <hr>
+  <button data-act="shortcuts">Keyboard shortcuts</button>
+  <button data-act="about">About</button>
+</div>
+<datalist id="films"></datalist>
+<script src="/ui/app.js"></script>
+</body>
+</html>
