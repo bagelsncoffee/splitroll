@@ -4,10 +4,10 @@ Split half-frame 35mm scans into pairs, review them on a contact sheet, and expo
 
 - **Import** a folder of scans → it becomes a roll. Drag a folder onto the window or use *Import folder*.
 - **Auto-detect** finds the gap between the two half-frames and sets the roll's border.
-- **Contact sheet** — select frames (Shift-click for ranges) and split, mark full, rotate or remove them in one go.
-- **Crop** — drag the cut line, nudge with `,` `.`, rotate the scan or each half, zoom and pan. `Enter` splits and moves on.
+- **Contact sheet** — select like File Explorer (marquee drag, Ctrl/Shift/Alt-click, `Ctrl+A`/`Ctrl+D`) and split, mark full, rotate or remove frames in one go.
+- **Crop** — drag the cut line and the border tabs, nudge with `,` `.`, rotate the scan or each half, zoom and pan. `Enter` splits, `→` moves on.
 - **Export** TIFF / PNG (lossless, 16-bit and colour profile preserved) or JPEG (quality 100, 4:4:4).
-- Everything is undoable with `Ctrl+Z`. Your scans are never modified.
+- Everything is undoable with `Ctrl+Z` — including an accidental import. Your scans are never modified.
 
 Press `?` in the app for all keyboard shortcuts.
 

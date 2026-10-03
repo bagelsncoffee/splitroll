@@ -246,6 +246,27 @@ class Library:
         self.touch()
         return gone
 
+    def insert_frames(self, rid, items):
+        """Re-insert previously removed frames: items = [{"index": i, "frame": {...}}]."""
+        keys = {"id", "path", "name", "w", "h", "bits"} | FRAME_FIELDS
+        with self.lock:
+            r = self.roll(rid)
+            if not r:
+                return []
+            have = {f["id"] for f in r["frames"]}
+            done = []
+            for it in sorted(items, key=lambda x: x.get("index", 0)):
+                f = {k: v for k, v in (it.get("frame") or {}).items() if k in keys}
+                if not f.get("id") or not f.get("path") or f["id"] in have:
+                    continue
+                f = _clean_frame({**new_frame(f["path"], f.get("name", ""), 0, 0, 8), **f})
+                i = max(0, min(len(r["frames"]), int(it.get("index", len(r["frames"])))))
+                r["frames"].insert(i, f)
+                have.add(f["id"])
+                done.append(f)
+        self.touch()
+        return done
+
     def append_frames(self, rid, frames):
         with self.lock:
             r = self.roll(rid)

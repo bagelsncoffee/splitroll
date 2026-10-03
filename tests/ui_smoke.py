@@ -64,6 +64,37 @@ with sync_playwright() as p:
     pg.keyboard.press("Control+Shift+z"); pg.wait_for_timeout(400)
     assert pg.locator("#grid .chip.st-split").count() == 4, "redo failed"
 
+    # explorer-style selection
+    cards.nth(5).click(); pg.wait_for_timeout(150)
+    assert pg.locator("#grid .fc.sel").count() == 1
+    cards.nth(7).click(modifiers=["Control"]); pg.wait_for_timeout(150)
+    assert pg.locator("#grid .fc.sel").count() == 2
+    cards.nth(7).click(modifiers=["Alt"]); pg.wait_for_timeout(150)
+    assert pg.locator("#grid .fc.sel").count() == 1
+    pg.keyboard.press("Control+d"); pg.wait_for_timeout(150)
+    assert pg.locator("#grid .fc.sel").count() == 0
+    a, b2 = cards.nth(0).bounding_box(), cards.nth(4).bounding_box()
+    pg.mouse.move(a["x"] + 10, a["y"] + 10); pg.mouse.down()
+    pg.mouse.move(b2["x"] + 20, b2["y"] + 20, steps=8); pg.mouse.up(); pg.wait_for_timeout(200)
+    n_marq = pg.locator("#grid .fc.sel").count()
+    assert n_marq >= 2, n_marq
+    pg.screenshot(path=SHOTS / "03b_marquee.png")
+    pg.keyboard.press("Control+Shift+I"); pg.wait_for_timeout(150)
+    assert pg.locator("#grid .fc.sel").count() == 9 - n_marq
+    pg.locator("[data-act=selectMenu]").click(); pg.wait_for_timeout(200)
+    pg.screenshot(path=SHOTS / "03c_select_menu.png")
+    pg.locator("#pop button", has_text="Split (").click(); pg.wait_for_timeout(200)
+    assert pg.locator("#grid .fc.sel").count() == 4
+    pg.keyboard.press("Control+d")
+    gw = pg.locator("#gridWrap").bounding_box()
+    cards.nth(1).click(); pg.mouse.click(gw["x"] + gw["width"] - 30, gw["y"] + gw["height"] - 30)   # empty space clears
+    assert pg.locator("#grid .fc.sel").count() == 0
+    cards.nth(0).click()
+    pg.keyboard.press("ArrowRight"); pg.keyboard.press("ArrowRight"); pg.keyboard.press("Shift+ArrowRight")
+    pg.wait_for_timeout(150)
+    assert pg.locator("#grid .fc.sel").count() == 2
+    pg.keyboard.press("Control+d")
+
     # crop tab via double-click
     cards.nth(4).dblclick()
     pg.wait_for_timeout(900)
@@ -98,9 +129,32 @@ with sync_playwright() as p:
     assert abs(cut3 - 51.0) < 0.6, cut3
     pg.screenshot(path=SHOTS / "05_crop_auto.png")
     pg.keyboard.press("Enter"); pg.wait_for_timeout(700)
+    assert "FRAME 05" in pg.locator(".bar").inner_text(), "split must not auto-advance"
+    assert "✓ SPLIT" in pg.locator(".bar").inner_text()
+    # border wings: drag the top-right wing outwards
+    border0 = api("GET", "/api/state")["rolls"][1]["border"]
+    box = pg.locator("#cv").bounding_box()
+    w = pg.evaluate("(() => { const r = roll(), f = r.frames[S.idx]; return wings(r, f, geo())[1]; })()")
+    pg.mouse.move(box["x"] + w["x"], box["y"] + w["y"]); pg.mouse.down()
+    pg.mouse.move(box["x"] + w["x"] + 40, box["y"] + w["y"], steps=6); pg.mouse.up()
+    pg.wait_for_timeout(600)
+    border1 = api("GET", "/api/state")["rolls"][1]["border"]
+    assert border1 > border0 + 20, (border0, border1)
+    assert pg.locator("#borderIn").input_value() == str(border1)
+    pg.screenshot(path=SHOTS / "06b_border_drag.png")
+    pg.keyboard.press("Control+z"); pg.wait_for_timeout(500)
+    assert api("GET", "/api/state")["rolls"][1]["border"] == border0, "border undo"
+    # shift+scroll widens border
+    pg.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    pg.keyboard.down("Shift"); pg.mouse.wheel(0, -100); pg.mouse.wheel(0, -100); pg.keyboard.up("Shift")
+    pg.wait_for_timeout(800)
+    assert api("GET", "/api/state")["rolls"][1]["border"] == border0 + 4
+    pg.keyboard.press("Control+z"); pg.wait_for_timeout(400)
+    pg.keyboard.press("h"); pg.wait_for_timeout(200)
+    pg.keyboard.press("ArrowRight"); pg.wait_for_timeout(700)
     assert "FRAME 06" in pg.locator(".bar").inner_text()
     pg.keyboard.press("f"); pg.wait_for_timeout(700)
-    pg.keyboard.press("ArrowLeft"); pg.wait_for_timeout(700)
+    assert "FRAME 06" in pg.locator(".bar").inner_text()
     pg.screenshot(path=SHOTS / "06_crop_full.png")
     pg.keyboard.press("r"); pg.wait_for_timeout(900)
     pg.screenshot(path=SHOTS / "07_rotated.png")
@@ -138,6 +192,32 @@ with sync_playwright() as p:
     pg.screenshot(path=SHOTS / "12_conflict.png")
     assert pg.locator(".modal", has_text="already exist").count() == 1
     pg.get_by_role("button", name="SKIP EXISTING").click(); pg.wait_for_timeout(1500)
+    # accidentally add the 16-bit roll into roll 2, then undo via toast / sources menu
+    rid2 = api("GET", "/api/state")["rolls"][1]["id"]
+    pg.locator(".roll").nth(1).locator(".r-stats").click(); pg.wait_for_timeout(300)
+    pg.keyboard.press("1"); pg.wait_for_timeout(300)
+    pg.evaluate(f"startImport('/home/claude/samples/roll16', '{rid2}')")
+    for _ in range(60):
+        if pg.locator(".toast button", has_text="UNDO IMPORT").count():
+            break
+        pg.wait_for_timeout(250)
+    assert len(api("GET", "/api/state")["rolls"][1]["frames"]) == 15
+    pg.screenshot(path=SHOTS / "16b_sources.png")
+    pg.locator(".toast button", has_text="UNDO IMPORT").click(); pg.wait_for_timeout(800)
+    assert len(api("GET", "/api/state")["rolls"][1]["frames"]) == 9, "import undo"
+    pg.keyboard.press("Control+Shift+z"); pg.wait_for_timeout(800)
+    assert len(api("GET", "/api/state")["rolls"][1]["frames"]) == 15, "import redo"
+    pg.locator("[data-act=sourcesMenu]").click(); pg.wait_for_timeout(200)
+    pg.screenshot(path=SHOTS / "16c_sources_menu.png")
+    pg.locator("#pop .pop-x").nth(1).click(); pg.wait_for_timeout(300)
+    pg.get_by_role("button", name="REMOVE").click(); pg.wait_for_timeout(800)
+    fr = api("GET", "/api/state")["rolls"][1]["frames"]
+    assert len(fr) == 9 and fr[0]["state"] == "split", len(fr)
+    pg.keyboard.press("Control+z"); pg.wait_for_timeout(800)
+    assert len(api("GET", "/api/state")["rolls"][1]["frames"]) == 15, "remove undo"
+    pg.keyboard.press("Control+Shift+z"); pg.wait_for_timeout(800)
+    assert len(api("GET", "/api/state")["rolls"][1]["frames"]) == 9
+
     # 16-bit roll in contact view + missing file handling
     pg.locator(".roll").nth(0).locator(".r-stats").click(); pg.wait_for_timeout(700)
     pg.keyboard.press("1"); pg.wait_for_timeout(700)

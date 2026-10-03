@@ -89,8 +89,20 @@ async function patchRoll(r, changes, { undo = true } = {}) {
   try { await PATCH(`/api/rolls/${r.id}`, changes); }
   catch (e) { toast('Could not save roll: ' + e.message, { err: true }); }
 }
-function applyHistory(entry, which) {
+async function applyHistory(entry, which) {
   const r = rollById(entry.rid); if (!r) return;
+  if (entry.kind === 'frames') {                       // frames removed (or imported)
+    if (S.active !== r.id) S.active = r.id;
+    if (entry.added && !entry.removed) {               // first undo of an import: capture what to put back
+      entry.removed = entry.added.map(id => ({ index: r.frames.findIndex(f => f.id === id), frame: r.frames.find(f => f.id === id) }))
+        .filter(x => x.frame).map(x => ({ index: x.index, frame: { ...x.frame } }));
+      entry.addedIsInverse = true;
+    }
+    const putBack = entry.addedIsInverse ? which === 'after' : which === 'before';
+    if (putBack) await restoreFrames(r, entry.removed);
+    else await deleteFrames(r, entry.removed.map(x => r.frames.find(f => f.id === x.frame.id)).filter(Boolean));
+    return;
+  }
   if (entry.frames) entry.frames.forEach(it => {
     const f = r.frames.find(x => x.id === it.id); if (!f) return;
     Object.assign(f, it[which]); queue(r, f);
@@ -99,7 +111,16 @@ function applyHistory(entry, which) {
   if (S.active !== r.id) { S.active = r.id; }
   renderAll();
 }
-function undo() { const e = S.undo.pop(); if (!e) return toast('Nothing to undo'); applyHistory(e, 'before'); S.redo.push(e); toast('Undone'); }
+function undoEntry(e) {                 // undo a specific entry (from a toast's UNDO button)
+  const i = S.undo.lastIndexOf(e); if (i < 0) return toast('Already undone');
+  S.undo.splice(i, 1); applyHistory(e, 'before'); S.redo.push(e);
+  toast(e.added ? 'Import undone' : 'Frames restored');
+}
+function undo() {
+  const e = S.undo.pop(); if (!e) return toast('Nothing to undo');
+  applyHistory(e, 'before'); S.redo.push(e);
+  toast(e.kind === 'frames' ? (e.added ? 'Import undone' : 'Frames restored') : 'Undone');
+}
 function redo() { const e = S.redo.pop(); if (!e) return toast('Nothing to redo'); applyHistory(e, 'after'); S.undo.push(e); toast('Redone'); }
 
 // ── toasts, modals, menu ───────────────────────────────────────────────────
@@ -260,11 +281,12 @@ function contactBar(r) {
       <button class="btn" data-act="selRotate" title="Rotate selected scans 90°">↻ ROTATE</button>
       <button class="btn danger" data-act="selDelete" title="Remove from roll (files on disk are untouched)">REMOVE</button>
       <button class="btn" data-act="selClear">CLEAR</button></div>` : '';
-  const all = s.size === r.frames.length;
+  const srcs = sources(r);
   return `<div class="bar" id="csBar">
       ${s.size ? selActions : `<span class="stat"><b>${r.frames.length}</b> FRAMES · <b>${c.split}</b> SPLIT · <b>${c.full}</b> FULL · <b>${c.pending}</b> PENDING</span>`}
       <div class="sp"></div>
-      <button class="btn" data-act="selAll">${all ? 'SELECT NONE' : 'SELECT ALL'}</button>
+      ${srcs.length > 1 ? `<button class="btn" data-act="sourcesMenu" title="Folders this roll was imported from">${srcs.length} SOURCES ▾</button>` : ''}
+      <button class="btn" data-act="selectMenu" title="Selection tools">SELECT ▾</button>
       ${s.size ? '' : `<div class="vd"></div>
       <button class="btn" data-act="importInto">+ ADD SCANS</button>
       <button class="btn" data-act="sheet" title="Save the contact sheet as a PNG">SAVE SHEET…</button>`}
@@ -292,17 +314,163 @@ function cardHtml(r, f, i) {
     <div class="fc-foot"><span class="fc-num">${pad(i + 1)}</span><span class="fc-name">${esc(f.name)}</span>
     <span class="chip st-${st}">${st.toUpperCase()}</span></div></div>`;
 }
-function onGridClick(e) {
-  const card = e.target.closest('.fc'); if (!card) return;
-  const r = roll(), i = +card.dataset.i, f = r.frames[i], s = sel(r);
-  if (e.shiftKey && S.anchor[r.id] != null) {
+// ── contact-sheet selection (File Explorer rules) ─────────────────────────
+//   click = only this · Ctrl-click toggle · Shift-click range · Alt-click remove
+//   drag on the sheet = marquee (Ctrl/Shift adds, Alt removes) · click empty space clears
+const M = { down: null, box: null, base: null, moved: false, raf: 0 };
+function setCursor(r, i) {
+  S.cursor = S.cursor || {}; S.cursor[r.id] = i;
+  document.querySelectorAll('#grid .fc').forEach(el => el.classList.toggle('cur', +el.dataset.i === i));
+}
+function clickSelect(e, i) {
+  const r = roll(), s = sel(r), id = r.frames[i].id, ctrl = e.ctrlKey || e.metaKey;
+  if (e.altKey) { s.delete(id); }
+  else if (e.shiftKey && S.anchor[r.id] != null) {
     const a = S.anchor[r.id], [lo, hi] = a < i ? [a, i] : [i, a];
+    if (!ctrl) s.clear();
     for (let k = lo; k <= hi; k++) s.add(r.frames[k].id);
-  } else {
-    s.has(f.id) ? s.delete(f.id) : s.add(f.id);
-    S.anchor[r.id] = i;
-  }
+  } else if (ctrl) { s.has(id) ? s.delete(id) : s.add(id); S.anchor[r.id] = i; }
+  else { s.clear(); s.add(id); S.anchor[r.id] = i; }
+  setCursor(r, i);
   refreshSelection();
+}
+function onGridDown(e) {
+  if (e.button !== 0 || !e.target.closest('#gridWrap') || e.target.closest('.bar')) return;
+  const wrap = $('gridWrap'), b = wrap.getBoundingClientRect();
+  if (e.clientX > b.left + wrap.clientWidth) return;              // on the scrollbar
+  e.preventDefault();
+  const r = roll();
+  M.down = { x: e.clientX - b.left, y: e.clientY - b.top + wrap.scrollTop, cx: e.clientX, cy: e.clientY, e };
+  M.base = new Set(sel(r)); M.moved = false;
+}
+function onGridMove(e) {
+  if (!M.down) return;
+  const wrap = $('gridWrap'); if (!wrap) { M.down = null; return; }
+  if (!M.moved && Math.hypot(e.clientX - M.down.cx, e.clientY - M.down.cy) < 5) return;
+  M.moved = true;
+  M.last = e;
+  cancelAnimationFrame(M.raf); M.raf = requestAnimationFrame(() => updateMarquee(M.last));
+}
+function updateMarquee(e) {
+  const wrap = $('gridWrap'); if (!wrap || !M.down) return;
+  const b = wrap.getBoundingClientRect();
+  // auto-scroll near the edges
+  if (e.clientY < b.top + 30) wrap.scrollTop -= 18;
+  else if (e.clientY > b.bottom - 30) wrap.scrollTop += 18;
+  const x = Math.max(0, Math.min(wrap.clientWidth, e.clientX - b.left));
+  const y = Math.max(0, e.clientY - b.top + wrap.scrollTop);
+  const L = Math.min(x, M.down.x), T = Math.min(y, M.down.y), R = Math.max(x, M.down.x), B = Math.max(y, M.down.y);
+  if (!M.box) { M.box = document.createElement('div'); M.box.className = 'marquee'; $('grid').appendChild(M.box); }
+  const g = $('grid').getBoundingClientRect(), off = { x: g.left - b.left, y: g.top - b.top + wrap.scrollTop };
+  Object.assign(M.box.style, { left: (L - off.x) + 'px', top: (T - off.y) + 'px', width: (R - L) + 'px', height: (B - T) + 'px' });
+  const r = roll(), s = sel(r), mode = e.altKey ? 'sub' : (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'set';
+  const hit = new Set();
+  document.querySelectorAll('#grid .fc').forEach(el => {
+    const c = el.getBoundingClientRect();
+    const cl = c.left - b.left, ct = c.top - b.top + wrap.scrollTop;
+    if (cl < R && cl + c.width > L && ct < B && ct + c.height > T) hit.add(r.frames[+el.dataset.i].id);
+  });
+  s.clear();
+  if (mode === 'set') hit.forEach(id => s.add(id));
+  else if (mode === 'add') { M.base.forEach(id => s.add(id)); hit.forEach(id => s.add(id)); }
+  else M.base.forEach(id => { if (!hit.has(id)) s.add(id); });
+  refreshSelection();
+  if (e.clientY < b.top + 30 || e.clientY > b.bottom - 30) { cancelAnimationFrame(M.raf); M.raf = requestAnimationFrame(() => updateMarquee(M.last)); }
+}
+function onGridUp(e) {
+  if (!M.down) return;
+  const start = M.down; M.down = null;
+  cancelAnimationFrame(M.raf);
+  if (M.box) { M.box.remove(); M.box = null; }
+  if (M.moved) return;
+  const card = start.e.target.closest('.fc');
+  if (card) clickSelect(start.e, +card.dataset.i);
+  else if (!(start.e.ctrlKey || start.e.shiftKey || start.e.altKey)) { sel(roll()).clear(); refreshSelection(); }
+}
+// ── popover menus ──────────────────────────────────────────────────────────
+function popover(anchor, items) {
+  closePopover();
+  const el = document.createElement('div');
+  el.className = 'menu pop'; el.id = 'pop';
+  el.innerHTML = items.map((it, i) => it === '-' ? '<hr>' : it.title ? `<div class="pop-title">${esc(it.title)}</div>`
+    : `<button data-pi="${i}" ${it.disabled ? 'disabled' : ''}><span>${esc(it.label)}</span>${it.hint ? `<kbd>${esc(it.hint)}</kbd>` : ''}${it.extra || ''}</button>`).join('');
+  document.body.appendChild(el);
+  const a = anchor.getBoundingClientRect();
+  el.style.top = (a.bottom + 4) + 'px';
+  el.style.left = Math.max(8, Math.min(window.innerWidth - el.offsetWidth - 8, a.right - el.offsetWidth)) + 'px';
+  el.style.bottom = 'auto';
+  el.onclick = e => {
+    const b = e.target.closest('[data-pi]'); if (!b) return;
+    const it = items[+b.dataset.pi], sub = e.target.closest('[data-sub]');
+    closePopover();
+    (sub ? it.sub : it.fn)?.();
+  };
+}
+function closePopover() { $('pop')?.remove(); }
+function selectMenu(btn) {
+  const r = roll(), c = counts(r);
+  popover(btn, [
+    { label: 'Select all', hint: 'Ctrl+A', fn: () => selectWhere(() => true) },
+    { label: 'Select none', hint: 'Ctrl+D', fn: () => { sel(r).clear(); refreshSelection(); } },
+    { label: 'Invert selection', hint: 'Ctrl+Shift+I', fn: invertSelection },
+    '-',
+    { label: `Pending (${c.pending})`, fn: () => selectWhere(f => eff(r, f) === 'pending') },
+    { label: `Split (${c.split})`, fn: () => selectWhere(f => eff(r, f) === 'split') },
+    { label: `Full frame (${c.full})`, fn: () => selectWhere(f => eff(r, f) === 'full') },
+    { label: 'Excluded from export', fn: () => selectWhere(f => eff(r, f) !== 'pending' && !f.export) },
+    { label: 'Rotated', fn: () => selectWhere(f => f.rot !== 0) },
+    { label: 'No gap detected', fn: () => selectWhere(f => !f.auto && eff(r, f) === 'pending') },
+  ]);
+}
+function invertSelection() {
+  const r = roll(), s = sel(r), keep = new Set(s); s.clear();
+  r.frames.forEach(f => { if (!keep.has(f.id)) s.add(f.id); });
+  refreshSelection();
+}
+
+// ── import sources (one per folder) ────────────────────────────────────────
+const dirOf = p => String(p).replace(/[\\/][^\\/]*$/, '');
+function sources(r) {
+  const m = new Map();
+  r.frames.forEach((f, i) => {
+    const d = dirOf(f.path);
+    if (!m.has(d)) m.set(d, { dir: d, name: d.split(/[\\/]/).pop() || d, ids: [], first: i });
+    m.get(d).ids.push(f.id);
+  });
+  return [...m.values()].sort((a, b) => a.first - b.first);
+}
+function sourcesMenu(btn) {
+  const r = roll(), srcs = sources(r);
+  popover(btn, [{ title: 'IMPORTED FROM' }, ...srcs.map(src => ({
+    label: `${src.name} · ${src.ids.length} frame${src.ids.length > 1 ? 's' : ''}`,
+    extra: `<span class="pop-x" data-sub title="Remove these frames from the roll">REMOVE</span>`,
+    fn: () => { const ids = new Set(src.ids); selectWhere(f => ids.has(f.id)); },
+    sub: () => removeFrames(r, r.frames.filter(f => src.ids.includes(f.id)), src.dir),
+  }))]);
+}
+
+function selectWhere(pred) {
+  const r = roll(), s = sel(r); s.clear();
+  r.frames.forEach(f => { if (pred(f)) s.add(f.id); });
+  refreshSelection();
+  toast(s.size ? `${s.size} selected` : 'Nothing matches');
+}
+function gridCols() {
+  const g = $('grid'); if (!g) return 1;
+  return Math.max(1, getComputedStyle(g).gridTemplateColumns.split(' ').length);
+}
+function moveCursor(dx, dy, extend) {
+  const r = roll(), n = r.frames.length, cols = gridCols();
+  const cur = S.cursor?.[r.id] ?? S.anchor[r.id] ?? -1;
+  let i = cur < 0 ? 0 : Math.max(0, Math.min(n - 1, cur + dx + dy * cols));
+  const s = sel(r);
+  if (extend && S.anchor[r.id] != null) {
+    const a = S.anchor[r.id], [lo, hi] = a < i ? [a, i] : [i, a];
+    s.clear(); for (let k = lo; k <= hi; k++) s.add(r.frames[k].id);
+  } else { s.clear(); s.add(r.frames[i].id); S.anchor[r.id] = i; }
+  setCursor(r, i);
+  refreshSelection();
+  document.querySelector(`#grid .fc[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' });
 }
 function renderContactKeepScroll() {
   const g = $('gridWrap'), top = g ? g.scrollTop : 0;
@@ -338,17 +506,31 @@ async function autoDetect(r, fs) {
   } catch (e) { toast(e.message, { err: true }); }
   renderAll();
 }
-async function removeFrames(r, fs) {
-  const ok = await confirmBox(`Remove ${fs.length} frame${fs.length > 1 ? 's' : ''}?`,
-    `They'll be removed from <code>${esc(r.name)}</code>. Your scan files on disk are not touched. This can't be undone.`, 'REMOVE', true);
+async function removeFrames(r, fs, fromDir) {
+  const n = fs.length, what = `${n} frame${n > 1 ? 's' : ''}`;
+  const ok = await confirmBox(`Remove ${what}?`,
+    `${fromDir ? `Everything imported from <code>${esc(fromDir)}</code> ` : 'They '}will be removed from <code>${esc(r.name)}</code>.
+     Your scan files on disk are not touched, and <code>Ctrl+Z</code> brings them back.`, 'REMOVE', true);
   if (!ok) return;
+  const entry = await deleteFrames(r, fs);
+  if (entry) { pushUndo(entry); toast(`Removed ${what}`, { action: { label: 'UNDO', fn: () => undoEntry(entry) } }); }
+}
+/** Remove frames on the server; returns an undo entry that can put them back. */
+async function deleteFrames(r, fs) {
   await flush();
-  await POST(`/api/rolls/${r.id}/frames/delete`, { ids: fs.map(f => f.id) });
-  const ids = new Set(fs.map(f => f.id));
+  const items = fs.map(f => ({ index: r.frames.indexOf(f), frame: { ...f } })).filter(x => x.index >= 0);
+  try { await POST(`/api/rolls/${r.id}/frames/delete`, { ids: items.map(x => x.frame.id) }); }
+  catch (e) { toast(e.message, { err: true }); return null; }
+  const ids = new Set(items.map(x => x.frame.id));
   r.frames = r.frames.filter(f => !ids.has(f.id));
-  fs.forEach(f => sel(r).delete(f.id));
-  S.undo = S.undo.filter(u => u.rid !== r.id); S.redo = [];
-  toast(`Removed ${fs.length} frame${fs.length > 1 ? 's' : ''}`);
+  ids.forEach(id => sel(r).delete(id));
+  if (S.idx >= r.frames.length) S.idx = Math.max(0, r.frames.length - 1);
+  renderAll();
+  return { rid: r.id, kind: 'frames', removed: items };
+}
+async function restoreFrames(r, items) {
+  try { await POST(`/api/rolls/${r.id}/frames/restore`, { items }); await refreshRoll(r.id); }
+  catch (e) { toast(e.message, { err: true }); }
   renderAll();
 }
 
@@ -371,16 +553,19 @@ function renderCrop(p, r) {
       <div class="vd"></div>
       <button class="btn sm" data-act="rotScan" title="Rotate scan 90° (R)">↻ ROTATE</button>
       <div class="sp"></div>
-      <span class="chip st-${st}">${st.toUpperCase()}${st !== 'pending' && !f.export ? ' · OFF' : ''}</span>
+      ${st === 'pending' ? '<span class="chip st-pending">PENDING</span>' : !f.export ? '<span class="chip st-pending" title="Excluded from export">OFF</span>' : ''}
       ${f.state !== 'pending' ? `<button class="btn" data-act="resetFrame" title="Back to pending (U)">RESET</button>` : ''}
       <button class="btn" data-act="batch" title="Split every pending frame in this roll">SPLIT ALL…</button>
-      <button class="btn${full ? ' on' : ''}" data-act="full" title="Keep this frame whole (F)">FULL</button>
-      <button class="btn pri" data-act="split" title="Split at the cut and go to the next frame (Enter)">SPLIT ✓</button>
+      <button class="btn${full ? ' on' : ''}" data-act="full" title="Keep this frame whole (F)">${full ? '✓ FULL' : 'FULL'}</button>
+      <button class="btn${st === 'split' ? ' on' : st === 'pending' ? ' pri' : ''}" data-act="split" title="Split at the cut (Enter)">${st === 'split' ? '✓ SPLIT' : 'SPLIT'}</button>
+      <button class="btn${st !== 'pending' && S.idx < n - 1 ? ' pri' : ''}" data-act="next" title="Next frame (→)" ${S.idx >= n - 1 ? 'disabled' : ''}>NEXT ▶</button>
     </div>
     <div class="stage" id="stage"><canvas id="cv"></canvas>
       <div class="zoombox"><button class="icon-btn" data-act="zoomOut" title="Zoom out (−)">−</button><span id="zoomD">${Math.round(S.zoom * 100)}%</span><button class="icon-btn" data-act="zoomIn" title="Zoom in (+)">+</button><button class="icon-btn small" data-act="zoomFit" title="Fit (0)">FIT</button></div>
-      <div class="hint">${full ? 'full frame — Enter splits it instead' : 'drag the line · double-click to place · , . nudge (Shift ×10) · A auto'}<br>scroll zoom · space/drag pan · ? all shortcuts</div></div>
+</div>
     <div class="halves" id="halves"></div>`;
+  V.hint = full ? 'full frame — Enter splits it instead<br>→ next frame · H fit · ? all shortcuts'
+    : 'drag the line · drag the ◂ ▸ tabs (or Shift+scroll) for the border<br>double-click places the cut · , . nudge · Enter split · → next · H fit · ? shortcuts';
   loadCropImage(r, f);
   preload(r, S.idx + 1); preload(r, S.idx - 1);
 }
@@ -458,9 +643,29 @@ function drawCrop() {
       ctx.beginPath(); ctx.roundRect ? ctx.roundRect(xm - 7, hy - 18, 14, 36, 7) : ctx.rect(xm - 7, hy - 18, 14, 36); ctx.fill(); ctx.stroke();
       ctx.fillStyle = '#141410'; ctx.fillRect(xm - 2.5, hy - 8, 1.2, 16); ctx.fillRect(xm + 1.3, hy - 8, 1.2, 16);
     }
+    // border "wings": drag them outwards to widen the border around the cut
+    wings(r, f, g).forEach(w => {
+      if (w.x < g.dX - 10 || w.x > g.dX + g.dW + 10) return;
+      const hot = V.mode === 'border' || V.hover === 'border';
+      ctx.fillStyle = hot ? 'rgba(232,160,48,0.95)' : 'rgba(30,30,28,0.85)';
+      ctx.strokeStyle = 'rgba(232,160,48,0.9)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.roundRect ? ctx.roundRect(w.x - 5, w.y - 11, 10, 22, 3) : ctx.rect(w.x - 5, w.y - 11, 10, 22); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = hot ? '#141410' : 'rgba(232,160,48,0.95)';
+      ctx.beginPath();
+      if (w.side < 0) { ctx.moveTo(w.x + 2, w.y - 4); ctx.lineTo(w.x - 2, w.y); ctx.lineTo(w.x + 2, w.y + 4); }
+      else { ctx.moveTo(w.x - 2, w.y - 4); ctx.lineTo(w.x + 2, w.y); ctx.lineTo(w.x - 2, w.y + 4); }
+      ctx.fill();
+    });
   }
   scheduleHalves();
   const zd = $('zoomD'); if (zd) zd.textContent = Math.round(S.zoom * 100) + '%';
+}
+function wings(r, f, g) {                    // canvas positions of the four border handles
+  const c = cutGeom(r, f, g), X = x => g.dX + (x - S.panX) * g.k;
+  let xl = X(c.le), xr = X(c.rs); const xm = X(c.mid);
+  if (xr - xl < 18) { xl = xm - 9; xr = xm + 9; }
+  const yt = Math.max(g.dY, 0) + 24, yb = Math.min(g.dY + g.dH, $('stage').clientHeight) - 24;
+  return [{ x: xl, y: yt, side: -1 }, { x: xr, y: yt, side: 1 }, { x: xl, y: yb, side: -1 }, { x: xr, y: yb, side: 1 }];
 }
 function scheduleHalves() { cancelAnimationFrame(V.raf); V.raf = requestAnimationFrame(drawHalves); }
 function drawHalves() {
@@ -470,7 +675,7 @@ function drawHalves() {
   const num = pad(S.idx + 1, r.frames.length > 99 ? 3 : 2), base = safeName(r.name), stem = safeName(f.name.replace(/\.[^.]+$/, ''));
   const src = S.settings.naming === 'source';
   if (st === 'full') {
-    box.innerHTML = `<div class="half"><div class="half-top"><span class="lbl">FULL FRAME</span></div><div class="half-box"><canvas id="hvF"></canvas></div></div>
+    box.innerHTML = `<div class="half"><div class="half-top"><span class="lbl">FULL FRAME</span></div><div class="half-box"><canvas id="hvF"></canvas></div></div><div class="crop-hint">${V.hint || ''}</div>
       <div class="half-info"><span class="muted" title="${esc(f.path)}">${esc(f.name)}</span><br>→ ${esc(src ? `${stem}.${ext}` : `${base}_${num}_full.${ext}`)}<br>${rotW(f)}×${rotH(f)} px${f.bits === 16 ? ' · 16-bit' : ''}</div>`;
     paintHalf($('hvF'), 0, V.img.width, 0, H, 520);
     return;
@@ -479,7 +684,7 @@ function drawHalves() {
   const lw = f.lRot % 180 ? rotH(f) : le, lh = f.lRot % 180 ? le : rotH(f);
   const rw = f.rRot % 180 ? rotH(f) : w - rs, rh = f.rRot % 180 ? w - rs : rotH(f);
   box.innerHTML = `<div class="half"><div class="half-top"><span class="lbl">LEFT</span><button class="icon-btn" data-act="rotL" title="Rotate left half ([)">↻</button></div><div class="half-box"><canvas id="hvL"></canvas></div></div>
-    <div class="half"><div class="half-top"><span class="lbl">RIGHT</span><button class="icon-btn" data-act="rotR" title="Rotate right half (])">↻</button></div><div class="half-box"><canvas id="hvR"></canvas></div></div>
+    <div class="half"><div class="half-top"><span class="lbl">RIGHT</span><button class="icon-btn" data-act="rotR" title="Rotate right half (])">↻</button></div><div class="half-box"><canvas id="hvR"></canvas></div></div><div class="crop-hint">${V.hint || ''}</div>
     <div class="half-info"><span class="muted" title="${esc(f.path)}">${esc(f.name)}</span><br>→ ${esc(src ? `${stem}_L.${ext}` : `${base}_${num}L.${ext}`)} · ${lw}×${lh}<br>→ ${esc(src ? `${stem}_R.${ext}` : `${base}_${num}R.${ext}`)} · ${rw}×${rh}${f.bits === 16 ? '<br>16-bit' : ''}</div>`;
   paintHalf($('hvL'), 0, c.le, f.lRot, H, 300);
   paintHalf($('hvR'), c.rs, V.img.width, f.rRot, H, 300);
@@ -497,58 +702,77 @@ function paintHalf(cv, x0, x1, rot, maxH, maxW) {
 }
 function safeName(s) { return (String(s).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim().replace(/[. ]+$/, '')) || 'roll'; }
 
+function canvasXY(e) { const b = $('cv').getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; }
+function hitCrop(x, y) {
+  const r = roll(), f = r?.frames[S.idx], g = geo();
+  if (!g || !f || eff(r, f) === 'full') return null;
+  if (wings(r, f, g).some(w => Math.abs(w.x - x) <= 9 && Math.abs(w.y - y) <= 15)) return 'border';
+  return Math.abs(g.dX + (cutGeom(r, f, g).mid - S.panX) * g.k - x) <= 12 ? 'cut' : null;
+}
 function bindCanvas() {
   const cv = $('cv'); if (!cv || cv._bound) return; cv._bound = true;
-  const mx = e => { const b = cv.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
-  const nearLine = x => {
-    const r = roll(), f = r.frames[S.idx], g = geo();
-    if (!g || eff(r, f) === 'full') return false;
-    return Math.abs(g.dX + (cutGeom(r, f, g).mid - S.panX) * g.k - x) <= 12;
-  };
   cv.onmousedown = e => {
     if (!V.img) return;
-    const [x, y] = mx(e);
+    const [x, y] = canvasXY(e), hit = hitCrop(x, y);
     if (e.button === 1 || S.space) { V.mode = 'pan'; }
-    else if (e.button === 0 && nearLine(x)) { const f = roll().frames[S.idx]; V.mode = 'cut'; V.before = pick(f); }
+    else if (e.button === 0 && hit === 'border') { V.mode = 'border'; }
+    else if (e.button === 0 && hit === 'cut') { const f = roll().frames[S.idx]; V.mode = 'cut'; V.before = pick(f); }
     else if (e.button === 0 && S.zoom > 1) { V.mode = 'pan'; }
     else return;
     e.preventDefault(); V.lastX = e.clientX; V.lastY = e.clientY;
-    cv.style.cursor = V.mode === 'pan' ? 'grabbing' : 'ew-resize';
+    cv.style.cursor = V.mode === 'pan' ? 'grabbing' : V.mode === 'border' ? 'col-resize' : 'ew-resize';
   };
-  window.addEventListener('mousemove', e => {
-    if (S.tab !== 'crop' || !V.img || !$('cv')) return;
-    if (!V.mode) {
-      if (e.target !== $('cv')) return;
-      const [x] = mx(e);
-      $('cv').style.cursor = S.space ? 'grab' : nearLine(x) ? 'ew-resize' : S.zoom > 1 ? 'grab' : 'default';
-      return;
-    }
-    const g = geo(); if (!g) return;
-    if (V.mode === 'pan') {
-      S.panX -= (e.clientX - V.lastX) / g.k; S.panY -= (e.clientY - V.lastY) / g.k;
-      V.lastX = e.clientX; V.lastY = e.clientY; drawCrop();
-    } else if (V.mode === 'cut') {
-      const [x] = mx(e); setCutFromX(x, g, false);
-    }
-  });
-  window.addEventListener('mouseup', () => {
-    if (!V.mode) return;
-    if (V.mode === 'cut') {
-      const r = roll(), f = r.frames[S.idx];
-      if (V.before && V.before.cut !== f.cut) { pushUndo({ rid: r.id, frames: [{ id: f.id, before: V.before, after: pick(f) }] }); queue(r, f); }
-    }
-    V.mode = null; V.before = null; const c = $('cv'); if (c) c.style.cursor = 'default';
-  });
   cv.ondblclick = e => {
     const r = roll(), f = r.frames[S.idx], g = geo(); if (!g || eff(r, f) === 'full') return;
-    const [x] = mx(e); edit(r, [f], () => setCutFromX(x, g, true));
+    const [x, y] = canvasXY(e); if (hitCrop(x, y) === 'border') return;
+    edit(r, [f], () => setCutFromX(x, g, true));
   };
   cv.onwheel = e => {
     e.preventDefault(); const g = geo(); if (!g) return;
-    const [x, y] = mx(e), f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    if (e.shiftKey) {                         // Shift + scroll widens / narrows the border
+      const r = roll(), d = (e.deltaY || e.deltaX) < 0 ? 2 : -2;
+      setBorder((r.border || 0) + d, false);
+      clearTimeout(V.borderT); V.borderT = setTimeout(() => setBorder(roll().border, true), 450);
+      return;
+    }
+    const [x, y] = canvasXY(e), f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
     zoomAt(Math.max(1, Math.min(16, S.zoom * f)), x, y, g);
   };
 }
+// window-level drag handling (registered once)
+window.addEventListener('mousemove', e => {
+  if (S.tab !== 'crop' || !V.img || !$('cv')) return;
+  if (!V.mode) {
+    if (e.target !== $('cv')) { if (V.hover) { V.hover = null; drawCrop(); } return; }
+    const [x, y] = canvasXY(e), hit = hitCrop(x, y);
+    if (hit !== V.hover) { V.hover = hit; drawCrop(); }
+    $('cv').style.cursor = S.space ? 'grab' : hit === 'border' ? 'col-resize' : hit === 'cut' ? 'ew-resize' : S.zoom > 1 ? 'grab' : 'default';
+    return;
+  }
+  const g = geo(); if (!g) return;
+  if (V.mode === 'pan') {
+    S.panX -= (e.clientX - V.lastX) / g.k; S.panY -= (e.clientY - V.lastY) / g.k;
+    V.lastX = e.clientX; V.lastY = e.clientY; drawCrop();
+  } else if (V.mode === 'cut') {
+    const [x] = canvasXY(e); setCutFromX(x, g, false);
+  } else if (V.mode === 'border') {
+    const r = roll(), f = r.frames[S.idx], [x] = canvasXY(e);
+    const imgX = S.panX + (x - g.dX) / g.k, mid = cutGeom(r, f, g).mid;
+    const src = Math.abs(imgX - mid) * 2 * rotW(f) / g.iw;
+    setBorder(Math.round(src / 2) * 2, false);
+  }
+});
+window.addEventListener('mouseup', () => {
+  if (!V.mode) return;
+  const r = roll();
+  if (V.mode === 'cut' && r) {
+    const f = r.frames[S.idx];
+    if (V.before && V.before.cut !== f.cut) { pushUndo({ rid: r.id, frames: [{ id: f.id, before: V.before, after: pick(f) }] }); queue(r, f); }
+  } else if (V.mode === 'border' && r) {
+    setBorder(r.border, true);
+  }
+  V.mode = null; V.before = null; const c = $('cv'); if (c) c.style.cursor = 'default';
+});
 function setCutFromX(x, g, silent) {
   const r = roll(), f = r.frames[S.idx], w = rotW(f);
   const imgX = S.panX + (x - g.dX) / g.k;
@@ -583,13 +807,9 @@ function nudge(delta) {
 }
 function setState(state) {
   const r = roll(), f = r.frames[S.idx];
+  if (f.state === state && (state === 'pending' || f.export)) return;
   edit(r, [f], x => { x.state = state; if (state !== 'pending') x.export = true; });
-  if (state !== 'pending' && S.idx < r.frames.length - 1) { S.idx++; resetView(); }
-  else if (state !== 'pending') {
-    const left = r.frames.filter(x => eff(r, x) === 'pending').length;
-    toast(left ? `Last frame — ${left} still pending` : 'Roll done ✓', { action: { label: left ? 'NEXT PENDING' : 'EXPORT →', fn: () => left ? goPending() : setTab('export') } });
-  }
-  renderAll();
+  renderAll();                         // stay on this frame — → / NEXT moves on
 }
 function goPending() {
   const r = roll(); const i = r.frames.findIndex(x => eff(r, x) === 'pending');
@@ -633,7 +853,11 @@ function rotHalf(side) {
 function setBorder(v, commit) {
   const r = roll(); v = Math.max(0, Math.min(5000, parseInt(v, 10) || 0));
   if (commit) { if (v !== (r._borderStart ?? r.border)) { const b = r._borderStart ?? r.border; r.border = b; patchRoll(r, { border: v }); } delete r._borderStart; renderContactIfVisible(); }
-  else { if (r._borderStart === undefined) r._borderStart = r.border; r.border = v; }
+  else {
+    if (r._borderStart === undefined) r._borderStart = r.border;
+    r.border = v;
+    const bi = $('borderIn'); if (bi && document.activeElement !== bi) bi.value = v;
+  }
   drawCrop();
 }
 function renderContactIfVisible() { if (S.tab === 'contact') renderContactKeepScroll(); }
@@ -805,7 +1029,13 @@ async function startImport(path, rollId) {
     S.active = res.rollId; S.tab = 'contact'; S.idx = 0;
     track(res.job, j => {
       const r = rollById(res.rollId);
-      toast((r ? r.name + ': ' : '') + j.msg, j.failed ? { err: true } : {});
+      const added = j.result?.ids || [];
+      const entry = added.length ? { rid: res.rollId, kind: 'frames', added } : null;
+      if (entry) pushUndo(entry);
+      toast((r ? r.name + ': ' : '') + j.msg, {
+        err: !!j.failed, ms: 9000,
+        action: entry ? { label: 'UNDO IMPORT', fn: () => undoEntry(entry) } : null,
+      });
       if (j.errors?.length) console.warn(j.errors);
       renderAll();
     });
@@ -880,10 +1110,12 @@ function showShortcuts() {
     title: 'Keyboard shortcuts', buttons: [{ label: 'CLOSE', value: true, pri: true }],
     body: `<div class="keys">
       <h4>EVERYWHERE</h4>${k(['1', '2', '3'], 'Contact sheet / Crop / Export')}${k(['Ctrl', 'Z'], 'Undo')}${k(['Ctrl', 'Shift', 'Z'], 'Redo')}${k(['Ctrl', 'I'], 'Import folder as new roll')}${k(['Ctrl', '+', '−', '0'], 'Interface size bigger / smaller / reset')}${k(['?'], 'This list')}
-      <h4>CONTACT SHEET</h4>${k(['Click'], 'Select · Shift-click selects a range')}${k(['Double-click'], 'Open in Crop')}${k(['Ctrl', 'A'], 'Select all')}${k(['Esc'], 'Clear selection')}${k(['Del'], 'Remove selected from roll')}
-      <h4>CROP</h4>${k(['←', '→'], 'Previous / next frame')}${k(['Enter'], 'Split and go to next')}${k(['F'], 'Full frame and go to next')}${k(['U'], 'Back to pending')}
-      ${k([',', '.'], 'Nudge cut (hold Shift for ×10)')}${k(['A'], 'Auto-detect cut')}${k(['R'], 'Rotate scan')}${k(['[', ']'], 'Rotate left / right half')}
-      ${k(['+', '−', '0'], 'Zoom in / out / fit')}${k(['Space', 'drag'], 'Pan')}</div>`,
+      <h4>CONTACT SHEET</h4>${k(['Click'], 'Select one')}${k(['Ctrl', 'click'], 'Add / remove one')}${k(['Shift', 'click'], 'Select a range')}${k(['Alt', 'click'], 'Deselect')}
+      ${k(['Drag'], 'Marquee select (hold Ctrl/Shift to add, Alt to remove)')}${k(['Ctrl', 'A'], 'Select all')}${k(['Ctrl', 'D'], 'Select none')}${k(['Ctrl', 'Shift', 'I'], 'Invert selection')}
+      ${k(['←', '→', '↑', '↓'], 'Move (Shift extends)')}${k(['Enter'], 'Open in Crop')}${k(['Del'], 'Remove selected from roll')}
+      <h4>CROP</h4>${k(['←', '→'], 'Previous / next frame')}${k(['Enter'], 'Split')}${k(['F'], 'Full frame')}${k(['U'], 'Back to pending')}
+      ${k([',', '.'], 'Nudge cut (hold Shift for ×10)')}${k(['Shift', 'scroll'], 'Widen / narrow the border')}${k(['A'], 'Auto-detect cut')}${k(['R'], 'Rotate scan')}${k(['[', ']'], 'Rotate left / right half')}
+      ${k(['+', '−'], 'Zoom in / out')}${k(['H', '0'], 'Fit to view')}${k(['Space', 'drag'], 'Pan')}</div>`,
   });
 }
 function showAbout() {
@@ -929,9 +1161,10 @@ document.addEventListener('drop', e => {
 // ── actions + keyboard ─────────────────────────────────────────────────────
 const ACTIONS = {
   zoomUi: () => { toggleMenu(false); ask({ title: 'Interface size', body: `Currently ${Math.round((S.settings.uiZoom || 1) * 100)}%.<br>Use <code>Ctrl +</code> / <code>Ctrl −</code> to change it and <code>Ctrl 0</code> to reset.`, buttons: [{ label: 'SMALLER', value: -1 }, { label: 'RESET', value: 0 }, { label: 'BIGGER', value: 1, pri: true }] }).then(v => v !== null && v !== undefined && uiZoom(v)); },
+  selectMenu, sourcesMenu,
   importNew, importInto, relink, menu: () => toggleMenu(), newRoll, importLibrary, shortcuts: showShortcuts, about: showAbout,
   openData: () => { toggleMenu(false); POST('/api/reveal', { path: '@data' }); },
-  sheet: saveSheet, selAll: () => selAction('all'), selClear: () => selAction('clear'),
+  sheet: saveSheet, selClear: () => selAction('clear'),
   selSplit: () => selAction('split'), selFull: () => selAction('full'), selReset: () => selAction('reset'),
   selRotate: () => selAction('rotate'), selAuto: () => selAction('auto'), selDelete: () => selAction('delete'),
   prev: () => nav(-1), next: () => nav(1), split: () => setState('split'), full: () => setState('full'),
@@ -949,15 +1182,17 @@ document.addEventListener('click', e => {
     const a = t.dataset.act;
     if (a === 'deleteRoll') return deleteRoll(t.closest('.roll').dataset.rid);
     if (a === 'editFrame') { S.idx = +t.dataset.i; return setTab('crop'); }
-    ACTIONS[a]?.(); return;
+    ACTIONS[a]?.(t); return;
   }
   const tab = e.target.closest('.tab'); if (tab) return setTab(tab.dataset.tab);
-  if (e.target.closest('#grid')) return onGridClick(e);
   const fmt = e.target.closest('[data-fmt]'); if (fmt) return setSetting('exportFormat', fmt.dataset.fmt);
   const nm = e.target.closest('[data-naming]'); if (nm) return setSetting('naming', nm.dataset.naming);
   const row = e.target.closest('.exp-row');
   if (row && !e.target.closest('input')) { const cb = row.querySelector('input'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change', { bubbles: true })); }
 });
+document.addEventListener('mousedown', e => { if (!e.target.closest('#pop,[data-act="selectMenu"],[data-act="sourcesMenu"]')) closePopover(); if (S.tab === 'contact') onGridDown(e); });
+window.addEventListener('mousemove', onGridMove);
+window.addEventListener('mouseup', onGridUp);
 document.addEventListener('dblclick', e => {
   const card = e.target.closest('#grid .fc'); if (card) openCrop(+card.dataset.i);
 });
@@ -976,11 +1211,12 @@ document.addEventListener('keydown', e => {
     return;
   }
   if ($('modalRoot').innerHTML) return;
+  if (e.key === 'Escape' && $('pop')) return closePopover();
   if (e.key === 'Escape' && !$('menu').hidden) return toggleMenu(false);
   const ctrl = e.ctrlKey || e.metaKey, key = e.key;
   if (ctrl && key.toLowerCase() === 'z') { e.preventDefault(); return e.shiftKey ? redo() : undo(); }
   if (ctrl && key.toLowerCase() === 'y') { e.preventDefault(); return redo(); }
-  if (ctrl && key.toLowerCase() === 'i') { e.preventDefault(); return importNew(); }
+  if (ctrl && !e.shiftKey && key.toLowerCase() === 'i') { e.preventDefault(); return importNew(); }
   if (ctrl && (key === '=' || key === '+')) { e.preventDefault(); return uiZoom(1); }
   if (ctrl && key === '-') { e.preventDefault(); return uiZoom(-1); }
   if (ctrl && key === '0') { e.preventDefault(); return uiZoom(0); }
@@ -988,10 +1224,16 @@ document.addEventListener('keydown', e => {
   const r = roll(); if (!r || !r.frames.length) return;
   if (!ctrl && ['1', '2', '3'].includes(key)) return setTab(['contact', 'crop', 'export'][+key - 1]);
   if (S.tab === 'contact') {
-    if (ctrl && key.toLowerCase() === 'a') { e.preventDefault(); r.frames.forEach(f => sel(r).add(f.id)); return refreshSelection(); }
+    const k = key.toLowerCase();
+    if (ctrl && k === 'a') { e.preventDefault(); r.frames.forEach(f => sel(r).add(f.id)); return refreshSelection(); }
+    if (ctrl && k === 'd') { e.preventDefault(); sel(r).clear(); return refreshSelection(); }
+    if (ctrl && e.shiftKey && k === 'i') { e.preventDefault(); return invertSelection(); }
     if (key === 'Escape') return selAction('clear');
     if (key === 'Delete' || key === 'Backspace') return selAction('delete');
-    if (key === 'Enter') { const s = sel(r); const i = r.frames.findIndex(f => s.has(f.id)); return openCrop(Math.max(0, i)); }
+    if (key === 'Enter') { const s = sel(r); const cur = S.cursor?.[r.id]; const i = cur ?? r.frames.findIndex(f => s.has(f.id)); return openCrop(Math.max(0, i)); }
+    const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    if (arrows[key] && !ctrl) { e.preventDefault(); return moveCursor(...arrows[key], e.shiftKey); }
+    if (k === 'h' && !ctrl) { $('gridWrap')?.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     return;
   }
   if (S.tab !== 'crop' || ctrl) return;
@@ -1000,7 +1242,7 @@ document.addEventListener('keydown', e => {
     ArrowLeft: () => nav(-1), ArrowRight: () => nav(1), Enter: () => setState('split'), f: () => setState('full'),
     u: () => setState('pending'), a: ACTIONS.auto, r: rotScan, '[': () => rotHalf('l'), ']': () => rotHalf('r'),
     ',': () => nudge(e.shiftKey ? -0.5 : -0.05), '<': () => nudge(-0.5), '.': () => nudge(e.shiftKey ? 0.5 : 0.05), '>': () => nudge(0.5),
-    '+': ACTIONS.zoomIn, '=': ACTIONS.zoomIn, '-': ACTIONS.zoomOut, '0': ACTIONS.zoomFit,
+    '+': ACTIONS.zoomIn, '=': ACTIONS.zoomIn, '-': ACTIONS.zoomOut, '0': ACTIONS.zoomFit, h: ACTIONS.zoomFit,
   };
   const fn = map[key] || map[key.toLowerCase()];
   if (fn) { e.preventDefault(); fn(); }

@@ -175,3 +175,27 @@ def test_relink(samples, tmp_path):
         fr["path"] = "/gone/" + fr["name"]
     n, miss = jobs.relink(lib, r["id"], samples)
     assert (n, miss) == (6, 0)
+
+
+def test_remove_and_restore_frames(samples, tmp_path):
+    lib = Library(tmp_path / "lib.json")
+    cache = jobs.Cache(tmp_path / "cache")
+    r = lib.add_roll("x")
+    wait(jobs.import_folder(lib, cache, r["id"], samples / "roll16"))
+    before = [f["id"] for f in r["frames"]]
+    lib.update_frames(r["id"], [{"id": before[2], "state": "split", "cut": 48.0}])
+    gone = lib.delete_frames(r["id"], [before[1], before[2]])
+    items = [{"index": before.index(f["id"]), "frame": dict(f, missing=False)} for f in gone]
+    lib.insert_frames(r["id"], items)
+    assert [f["id"] for f in r["frames"]] == before
+    assert r["frames"][2]["state"] == "split" and r["frames"][2]["cut"] == 48.0
+    assert "missing" not in r["frames"][1]
+    assert lib.insert_frames(r["id"], items) == []          # no duplicates
+
+
+def test_import_result_lists_new_ids(samples, tmp_path):
+    lib = Library(tmp_path / "lib.json")
+    cache = jobs.Cache(tmp_path / "cache")
+    r = lib.add_roll("x")
+    j = wait(jobs.import_folder(lib, cache, r["id"], samples / "roll16"))
+    assert j["result"]["ids"] == [f["id"] for f in r["frames"]]

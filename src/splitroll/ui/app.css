@@ -134,8 +134,9 @@ button,input,select{font-family:inherit;font-size:inherit;color:inherit}
 .prog i{display:block;height:100%;background:var(--amber);transition:width .25s}
 
 /* overlays */
-#toasts{position:fixed;left:calc(50% + 125px);transform:translateX(-50%);top:96px;display:flex;flex-direction:column;gap:8px;z-index:1000;align-items:center;pointer-events:none}
-#toasts .toast{pointer-events:auto}
+#toasts{position:fixed;left:calc(50% + 125px);transform:translateX(-50%);bottom:28px;display:flex;flex-direction:column;gap:8px;z-index:1000;align-items:center;pointer-events:none}
+#toasts .toast{pointer-events:none}
+#toasts .toast button{pointer-events:auto}
 .toast{display:flex;align-items:center;gap:12px;background:var(--surf);border:1px solid var(--bdr-s);border-left:3px solid var(--amber);padding:9px 12px;border-radius:5px;font-size:11px;color:var(--text);max-width:420px;box-shadow:0 6px 24px rgba(0,0,0,.45);animation:tin .15s ease-out}
 .toast.err{border-left-color:var(--red)}
 @keyframes tin{from{transform:translateY(6px);opacity:0}}
@@ -160,3 +161,16 @@ body.dragging #dropOverlay{display:flex}
 .zoombox{position:absolute;left:10px;bottom:8px;display:flex;align-items:center;gap:2px;background:rgba(22,22,20,.82);border:1px solid var(--bdr);border-radius:5px;padding:2px 4px;font-size:10.5px;color:var(--muted)}
 .zoombox span{min-width:44px;text-align:center}
 .zoombox .icon-btn{font-size:12px;padding:1px 7px}
+.fc.cur{outline:1px dashed var(--amber-d);outline-offset:2px}
+.grid{position:relative}
+.marquee{position:absolute;border:1px solid var(--amber);background:rgba(232,160,48,.12);pointer-events:none;z-index:5}
+#gridWrap{user-select:none}
+.menu.pop{position:fixed;min-width:240px}
+.menu.pop button{display:flex;align-items:center;gap:10px}
+.menu.pop button span:first-child{flex:1}
+.menu.pop kbd{font-family:var(--mono);font-size:9.5px;color:var(--dim)}
+.pop-title{font-size:9.5px;letter-spacing:.1em;color:var(--dim);padding:6px 10px 4px}
+.pop-x{font-size:9.5px;letter-spacing:.06em;color:var(--dim);border:1px solid var(--bdr-s);border-radius:3px;padding:1px 6px}
+.pop-x:hover{color:var(--red);border-color:var(--red)}
+.crop-hint{flex:1;align-self:center;text-align:center;font-size:10px;line-height:1.8;color:var(--dim)}
+.half-info{margin-left:0}

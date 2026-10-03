@@ -2,4 +2,4 @@
 
 APP_NAME = "splitroll"          # single place to rename the app
 APP_TITLE = "splitroll"
-VERSION = "1.2.1"
+VERSION = "1.3.0"

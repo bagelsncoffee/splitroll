@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.3.0 — 2026-10-03
+
+**Contact sheet selection, like File Explorer**
+- Drag on the sheet to marquee-select (hold Ctrl/Shift to add, Alt to remove).
+- Click selects one · Ctrl-click adds/removes · Shift-click selects a range · Alt-click deselects ·
+  click empty space to clear.
+- `Ctrl+A` all · `Ctrl+D` none · `Ctrl+Shift+I` invert · arrow keys move (Shift extends) · `Enter` opens in Crop.
+- New *SELECT ▾* menu: all, none, invert, pending, split, full, excluded from export, rotated, no gap detected.
+
+**Border you can drag**
+- Drag the ◂ ▸ tabs on either side of the cut to widen or narrow the border, or hold Shift and scroll.
+  The number box still works; every change is undoable.
+
+**Calmer cropping**
+- *Split* and *Full* no longer jump to the next frame. Press → or *NEXT ▶* (highlighted once the frame is done).
+- `H` fits the image to the view.
+
+**Undo an import**
+- Every import can be undone — *UNDO IMPORT* on the message, or `Ctrl+Z`.
+- Rolls built from more than one folder show *SOURCES ▾*: select or remove everything from one folder in a click.
+- Removing frames is now undoable too (`Ctrl+Z` puts them back with their crops).
+
+**Fixes**
+- Messages no longer block clicks on the picture or buttons underneath them.
+- Dragging the cut could record duplicate undo steps after visiting the Crop tab several times.
+
 ## 1.2.1 — 2026-10-03 · first public release
 
 Fixes from testing the 1.2.0 build on Windows 11:

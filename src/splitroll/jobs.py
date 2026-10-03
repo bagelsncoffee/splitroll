@@ -184,7 +184,8 @@ def _import_worker(lib, cache, job, roll_id, files):
         skipped = len(files) - len(todo)
         msg = f"Imported {len(added)}" + (f", {job['failed']} failed" if job["failed"] else "") \
               + (f", {skipped} already in roll" if skipped else "") + extra
-        _finish(job, msg, {"added": len(added), "border": extra != ""})
+        _finish(job, msg, {"added": len(added), "ids": [f["id"] for f in added], "border": extra != "",
+                           "firstImport": first_import})
     except Exception as e:
         log.exception("import crashed")
         _finish(job, f"Import failed: {e}")

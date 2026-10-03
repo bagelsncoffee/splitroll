@@ -134,6 +134,12 @@ def create_app(lib, cache, dialogs):
             cache.drop(f["id"])
         return jsonify({"deleted": len(gone)})
 
+    @app.route("/api/rolls/<rid>/frames/restore", methods=["POST"])
+    def restore_frames(rid):
+        need_roll(rid)
+        done = lib.insert_frames(rid, body().get("items", []))
+        return jsonify({"restored": len(done)})
+
     @app.route("/api/rolls/<rid>/detect", methods=["POST"])
     def detect(rid):
         r = need_roll(rid)
