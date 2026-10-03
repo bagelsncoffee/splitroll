@@ -86,4 +86,4 @@ mkdir -p "$ROOT/dist"
 OUT="$ROOT/dist/splitroll-$VERSION-setup.exe"
 (cd "$N" && makensis -V2 -DVERSION="$VERSION" -DSTAGE="$STAGE" -DOUTFILE="$OUT" -DSIZE_KB="$SIZE_KB" installer.nsi)
 ls -la "$OUT"
-sha256sum "$OUT" | tee "$OUT.sha256"
+(cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")" | tee "$(basename "$OUT").sha256")
